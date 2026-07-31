@@ -1,9 +1,9 @@
 [Unit]
-Description=Refresh WorldMonitor gold and silver market data every ten minutes
+Description=Refresh WorldMonitor gold and silver market data every five minutes
 
 [Timer]
 OnBootSec=4min
-OnUnitActiveSec=10min
+OnUnitActiveSec=5min
 Persistent=true
 Unit=worldmonitor-seed-fast.service
 
