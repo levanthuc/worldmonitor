@@ -1,0 +1,10 @@
+[Unit]
+Description=WorldMonitor gold and silver daily macro and risk seed
+Wants=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/opt/worldmonitor
+ExecStart=/usr/bin/flock -n /var/lock/worldmonitor-seed.lock /opt/worldmonitor/scripts/vps/worldmonitor-seed.sh daily

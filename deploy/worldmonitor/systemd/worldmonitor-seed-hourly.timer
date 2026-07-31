@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh WorldMonitor sentiment and prediction context hourly
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=3min
+Persistent=true
+Unit=worldmonitor-seed-hourly.service
+
+[Install]
+WantedBy=timers.target

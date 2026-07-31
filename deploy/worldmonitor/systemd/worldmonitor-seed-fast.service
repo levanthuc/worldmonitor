@@ -1,0 +1,12 @@
+[Unit]
+Description=WorldMonitor gold and silver fast market seed
+Wants=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/opt/worldmonitor
+# A common lock prevents fast, hourly and daily sources from writing a partial
+# snapshot at the same time. A skipped overlapping timer is safe; it retries.
+ExecStart=/usr/bin/flock -n /var/lock/worldmonitor-seed.lock /opt/worldmonitor/scripts/vps/worldmonitor-seed.sh fast

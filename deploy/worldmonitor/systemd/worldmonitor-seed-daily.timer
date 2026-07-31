@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh WorldMonitor macro, positioning and geopolitical context daily
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=5min
+Persistent=true
+Unit=worldmonitor-seed-daily.service
+
+[Install]
+WantedBy=timers.target
