@@ -19,6 +19,11 @@ const KEYS = {
   refineryInputs: 'economic:refinery-inputs:v1',
 };
 
+// FRED is the required macro source for this seed. EIA enriches the energy
+// panels, but is optional: a self-hosted deployment without an EIA key must
+// still refresh FRED, the macro signals and the financial-stress index.
+const EIA_CONFIGURED = Boolean(process.env.EIA_API_KEY?.trim());
+
 const FRED_KEY_PREFIX = 'economic:fred:v1';
 const STRESS_INDEX_KEY = 'economic:stress-index:v1';
 const STRESS_INDEX_TTL = 21600; // 6h
@@ -812,15 +817,17 @@ async function fetchRefineryInputs() {
 // All secondary keys MUST be written inside fetchAll() before returning.
 
 async function fetchAll() {
+  const optionalEia = (fetcher) => EIA_CONFIGURED ? fetcher() : null;
+  if (!EIA_CONFIGURED) console.log('  EIA API key not configured — skipping optional EIA series');
   const [energyPrices, energyCapacity, fredResults, macroSignals, crudeInventories, natGasStorage, sprLevels, refineryInputs] = await Promise.allSettled([
-    fetchEnergyPrices(),
-    fetchEnergyCapacity(),
+    optionalEia(fetchEnergyPrices),
+    optionalEia(fetchEnergyCapacity),
     fetchFredSeries(),
     fetchMacroSignals(_curlProxyAuth),
-    fetchCrudeInventories(),
-    fetchNatGasStorage(),
-    fetchSprLevels(),
-    fetchRefineryInputs(),
+    optionalEia(fetchCrudeInventories),
+    optionalEia(fetchNatGasStorage),
+    optionalEia(fetchSprLevels),
+    optionalEia(fetchRefineryInputs),
   ]);
 
   const ep = energyPrices.status === 'fulfilled' ? energyPrices.value : null;
@@ -903,11 +910,14 @@ async function fetchAll() {
     }
   }
 
-  return ep || { prices: [] };
+  // An empty primary energy payload is an intentional, visible state when
+  // EIA is not configured. It must not make a successful FRED refresh fail
+  // its contract or suppress the secondary FRED/stress records written above.
+  return ep || (EIA_CONFIGURED ? { prices: [] } : { prices: [], sourceUnavailable: true });
 }
 
 function validate(data) {
-  return data?.prices?.length > 0;
+  return data?.prices?.length > 0 || data?.sourceUnavailable === true;
 }
 
 export function declareRecords(data) {
@@ -922,6 +932,10 @@ if (process.argv[1]?.endsWith('seed-economy.mjs')) {
     declareRecords,
     schemaVersion: 1,
     maxStaleMin: 150,
+    // No EIA key is a configured optional-source absence, not a failed FRED
+    // refresh. Publish the canonical energy cache as an explicit OK_ZERO
+    // state while the FRED secondary keys remain fresh.
+    zeroIsValid: !EIA_CONFIGURED,
   }).catch((err) => {
     const _cause = err.cause ? ` (cause: ${err.cause.message || err.cause.code || err.cause})` : ''; console.error('FATAL:', (err.message || err) + _cause);
     process.exit(1);
