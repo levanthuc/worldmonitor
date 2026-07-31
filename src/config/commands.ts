@@ -117,6 +117,7 @@ export const COMMANDS: Command[] = [
   { id: 'panel:thinktanks', keywords: ['think tanks', 'thinktanks', 'analysis'], label: 'Panel: Think Tanks', icon: '\u{1F9E0}', category: 'panels' },
   { id: 'panel:polymarket', keywords: ['predictions', 'polymarket', 'forecasts'], label: 'Panel: Predictions', icon: '\u{1F52E}', category: 'panels' },
   { id: 'panel:commodities', keywords: ['commodities', 'gold', 'silver'], label: 'Panel: Commodities', icon: '\u{1F4E6}', category: 'panels' },
+  { id: 'panel:gold-analyst', keywords: ['gold analyst', 'gold forecast', 'xau analysis', 'groq gold', 'phân tích vàng'], label: 'Panel: Gold Analyst', icon: '\u{1FA99}', category: 'panels' },
   { id: 'panel:markets', keywords: ['markets', 'stocks', 'indices'], label: 'Panel: Markets', icon: '\u{1F4C8}', category: 'panels' },
   { id: 'panel:economic', keywords: ['economic', 'economy', 'fred'], label: 'Panel: Economic Indicators', icon: '\u{1F4CA}', category: 'panels' },
   { id: 'panel:global-procurement', keywords: ['procurement', 'tenders', 'contracts', 'rfp', 'opportunities', 'government bids'], label: 'Panel: Global Procurement', icon: '\u{1F4CB}', category: 'panels' },

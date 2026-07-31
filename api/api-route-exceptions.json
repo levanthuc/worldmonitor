@@ -773,6 +773,13 @@
       "removal_issue": "#3207"
     },
     {
+      "path": "api/gold-analyst.ts",
+      "category": "migration-pending",
+      "reason": "SSE response endpoint for the self-hosted Gold/Silver Analyst panel. It cannot use a sebuf RPC until TS-server SSE codegen is available; the route validates a server-side Groq/Gemini/OpenAI allowlist, keeps credentials off the browser, gates forecasts on data readiness, and enforces its own per-IP minute and daily budgets.",
+      "owner": "@SebastienMelki",
+      "removal_issue": "#3207"
+    },
+    {
       "path": "api/widget-agent.ts",
       "category": "migration-pending",
       "reason": "Migrating to analyst/v1.WidgetComplete in commit 9 of #3207. Blocked on sebuf#150.",

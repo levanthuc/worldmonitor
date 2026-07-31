@@ -10,6 +10,14 @@ import { escapeHtml } from '@/utils/sanitize';
 import { trackLanguageChange } from '@/services/analytics';
 import { exportSettings, importSettings, type ImportResult } from '@/utils/settings-persistence';
 import { getSyncState, getLastSyncAt, syncNow, isCloudSyncEnabled } from '@/utils/cloud-prefs-sync';
+import {
+  fetchGoldAnalystConfig,
+  getGoldAnalystSettings,
+  setGoldAnalystSettings,
+  type GoldAnalystConfigResponse,
+  type GoldAnalystMode,
+  type GoldAnalystProvider,
+} from '@/services/gold-analyst-settings';
 
 const SYNC_STATE_LABELS: Record<string, string> = {
   synced: 'Synced', pending: 'Pending', syncing: 'Syncing\u2026',
@@ -106,6 +114,73 @@ function updateAiStatus(container: HTMLElement): void {
   } else {
     dot.classList.add('disabled');
     text.textContent = t('components.insights.aiFlowStatusDisabled');
+  }
+}
+
+function updateGoldAnalystSettingsUi(
+  container: HTMLElement,
+  config: GoldAnalystConfigResponse,
+): void {
+  const settings = getGoldAnalystSettings();
+  const providerSelect = container.querySelector<HTMLSelectElement>('#us-gold-provider');
+  const modelSelect = container.querySelector<HTMLSelectElement>('#us-gold-model');
+  const status = container.querySelector<HTMLElement>('#us-gold-provider-status');
+  const readiness = container.querySelector<HTMLElement>('#us-gold-readiness');
+  const missing = container.querySelector<HTMLElement>('#us-gold-missing');
+  if (!providerSelect || !modelSelect) return;
+
+  for (const option of providerSelect.options) {
+    if (option.value === 'auto') {
+      option.disabled = !config.providers.some((provider) => provider.configured);
+      continue;
+    }
+    const provider = config.providers.find((item) => item.id === option.value);
+    option.disabled = !provider?.configured;
+    if (provider) {
+      option.textContent = `${provider.label}${provider.freeTier ? ' (free tier)' : ''}${provider.configured ? '' : ' — chưa cấu hình'}`;
+    }
+  }
+
+  const selectedProvider = settings.provider === 'auto'
+    ? null
+    : config.providers.find((provider) => provider.id === settings.provider);
+  modelSelect.replaceChildren();
+  if (!selectedProvider) {
+    modelSelect.appendChild(new Option('Tự chọn theo chế độ', ''));
+    modelSelect.disabled = true;
+  } else {
+    modelSelect.disabled = false;
+    for (const model of selectedProvider.models) {
+      modelSelect.appendChild(new Option(`${model.label} · ${model.mode}`, model.id));
+    }
+    const validModel = selectedProvider.models.some((model) => model.id === settings.model)
+      ? settings.model
+      : selectedProvider.defaultModel;
+    modelSelect.value = validModel;
+    if (validModel !== settings.model) setGoldAnalystSettings({ model: validModel });
+  }
+
+  const configuredLabels = config.providers
+    .filter((provider) => provider.configured)
+    .map((provider) => provider.label);
+  if (status) {
+    status.textContent = configuredLabels.length
+      ? `Đã cấu hình: ${configuredLabels.join(', ')}. Key chỉ nằm ở server.`
+      : 'Chưa có AI provider nào được cấu hình ở server.';
+  }
+  if (readiness) {
+    const levelLabel = config.readiness.level === 'full'
+      ? 'đầy đủ'
+      : config.readiness.level === 'limited'
+        ? 'có giới hạn'
+        : 'không đủ';
+    readiness.textContent = `Data Readiness ${config.readiness.score}/100 · ${levelLabel} · ${config.sources.join(', ')}`;
+    readiness.classList.toggle('is-warn', config.readiness.level !== 'full');
+  }
+  if (missing) {
+    missing.textContent = config.readiness.missing.length
+      ? `Còn thiếu: ${config.readiness.missing.join(', ')}`
+      : 'Không có nhóm dữ liệu bắt buộc nào bị thiếu.';
   }
 }
 
@@ -233,6 +308,38 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
         <a href="${DESKTOP_RELEASES_URL}" target="_blank" rel="noopener noreferrer" class="ai-flow-cta-link">${t('components.insights.aiFlowDownloadDesktop')}</a>
       </div>
     `;
+
+    const goldSettings = getGoldAnalystSettings();
+    html += `<div class="gold-analyst-settings">
+      <div class="ai-flow-section-label">Gold / Silver Analyst</div>
+      <div class="ai-flow-toggle-desc">Chọn AI dùng cho phân tích. API key được giữ ở server, không lưu trong trình duyệt.</div>
+      <label class="gold-analyst-setting-label" for="us-gold-provider">Provider</label>
+      <select class="unified-settings-select" id="us-gold-provider">
+        <option value="auto"${goldSettings.provider === 'auto' ? ' selected' : ''}>Tự động theo chế độ</option>
+        <option value="groq"${goldSettings.provider === 'groq' ? ' selected' : ''}>Groq</option>
+        <option value="gemini"${goldSettings.provider === 'gemini' ? ' selected' : ''}>Google Gemini</option>
+        <option value="openai"${goldSettings.provider === 'openai' ? ' selected' : ''}>OpenAI</option>
+      </select>
+      <label class="gold-analyst-setting-label" for="us-gold-model">Model</label>
+      <select class="unified-settings-select" id="us-gold-model">
+        <option value="${escapeHtml(goldSettings.model)}">${escapeHtml(goldSettings.model)}</option>
+      </select>
+      <label class="gold-analyst-setting-label" for="us-gold-mode">Chế độ phân tích</label>
+      <select class="unified-settings-select" id="us-gold-mode">
+        <option value="fast"${goldSettings.mode === 'fast' ? ' selected' : ''}>Nhanh</option>
+        <option value="balanced"${goldSettings.mode === 'balanced' ? ' selected' : ''}>Cân bằng</option>
+        <option value="deep"${goldSettings.mode === 'deep' ? ' selected' : ''}>Phân tích sâu</option>
+      </select>
+      ${toggleRowHtml(
+        'us-gold-fallback',
+        'Tự chuyển provider khi lỗi',
+        'Chỉ chuyển sang provider đã cấu hình; chế độ thường ưu tiên dịch vụ free-tier.',
+        goldSettings.allowFallback,
+      )}
+      <div class="gold-analyst-settings-status" id="us-gold-provider-status">Đang kiểm tra cấu hình server…</div>
+      <div class="gold-analyst-settings-readiness" id="us-gold-readiness">Đang kiểm tra Data Readiness…</div>
+      <div class="ai-flow-toggle-desc" id="us-gold-missing"></div>
+    </div>`;
   }
 
   // Headline Memory requires Browser Local Model (it loads an embeddings
@@ -406,6 +513,20 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
     attach(container: HTMLElement): () => void {
       const ac = new AbortController();
       const { signal } = ac;
+      let goldConfig: GoldAnalystConfigResponse | null = null;
+
+      if (!host.isDesktopApp) {
+        void fetchGoldAnalystConfig(signal)
+          .then((config) => {
+            goldConfig = config;
+            updateGoldAnalystSettingsUi(container, config);
+          })
+          .catch((error: unknown) => {
+            if (error instanceof Error && error.name === 'AbortError') return;
+            const status = container.querySelector<HTMLElement>('#us-gold-provider-status');
+            if (status) status.textContent = 'Không đọc được cấu hình Gold Analyst từ server.';
+          });
+      }
 
       container.addEventListener('change', (e) => {
         const target = e.target as HTMLInputElement;
@@ -459,6 +580,30 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
         if (target.id === 'us-language') {
           trackLanguageChange(target.value);
           void changeLanguage(target.value);
+          return;
+        }
+        if (target.id === 'us-gold-provider') {
+          const provider = target.value as GoldAnalystProvider;
+          const providerConfig = provider === 'auto'
+            ? null
+            : goldConfig?.providers.find((item) => item.id === provider);
+          setGoldAnalystSettings({
+            provider,
+            model: providerConfig?.defaultModel ?? '',
+          });
+          if (goldConfig) updateGoldAnalystSettingsUi(container, goldConfig);
+          return;
+        }
+        if (target.id === 'us-gold-model') {
+          setGoldAnalystSettings({ model: target.value });
+          return;
+        }
+        if (target.id === 'us-gold-mode') {
+          setGoldAnalystSettings({ mode: target.value as GoldAnalystMode });
+          return;
+        }
+        if (target.id === 'us-gold-fallback') {
+          setGoldAnalystSettings({ allowFallback: target.checked });
           return;
         }
         if (target.id === 'us-cloud') {

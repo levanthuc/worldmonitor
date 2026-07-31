@@ -7,10 +7,18 @@
 #   final         — nginx (static) + node (API) under supervisord
 # =============================================================================
 
-# ── Stage 1: Builder ─────────────────────────────────────────────────────────
-FROM node:24-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS builder
+# ── Stage 1: Seeder ──────────────────────────────────────────────────────────
+# This named target intentionally retains the repository scripts and their
+# dependencies so a self-hosted instance can run focused, in-network market
+# seed jobs without exposing Redis on a public host port.
+FROM node:24-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS seeder
 
 WORKDIR /app
+
+# Keep the default full dashboard for upstream users. Self-hosted deployments
+# can build the commodity-only UI with `--build-arg VITE_VARIANT=commodity`.
+ARG VITE_VARIANT=full
+ENV VITE_VARIANT=${VITE_VARIANT}
 
 # Install root dependencies (layer-cached until package.json changes)
 COPY package.json package-lock.json ./
@@ -18,6 +26,9 @@ RUN npm ci --ignore-scripts
 
 # Copy full source
 COPY . .
+
+# ── Stage 2: Builder ─────────────────────────────────────────────────────────
+FROM seeder AS builder
 
 # Compile TypeScript API handlers → self-contained ESM bundles
 # Output is api/**/*.js alongside the source .ts files
@@ -27,7 +38,7 @@ RUN node docker/build-handlers.mjs
 # Skip blog build — blog-site has its own deps not installed here
 RUN npm run build:crawlable-corpus && npm run build:sitemap && npx tsc && npx vite build
 
-# ── Stage 2: Runtime dependencies ───────────────────────────────────────────
+# ── Stage 3: Runtime dependencies ───────────────────────────────────────────
 FROM node:24-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS runtime-deps
 
 WORKDIR /app
@@ -41,7 +52,7 @@ COPY docker/runtime-package.json ./package.json
 COPY docker/runtime-package-lock.json ./package-lock.json
 RUN npm ci --omit=dev --omit=optional --ignore-scripts
 
-# ── Stage 3: Runtime ─────────────────────────────────────────────────────────
+# ── Stage 4: Runtime ─────────────────────────────────────────────────────────
 FROM node:24-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS final
 
 # nginx + supervisord

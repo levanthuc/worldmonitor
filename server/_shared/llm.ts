@@ -29,9 +29,17 @@ export interface ProviderCredentials {
   model: string;
   headers: Record<string, string>;
   extraBody?: Record<string, unknown>;
+  maxTokensParam?: 'max_tokens' | 'max_completion_tokens';
+  omitTemperature?: boolean;
 }
 
-export type LlmProviderName = 'ollama' | 'groq' | 'openrouter' | 'generic';
+export type LlmProviderName =
+  | 'ollama'
+  | 'groq'
+  | 'openai'
+  | 'gemini'
+  | 'openrouter'
+  | 'generic';
 
 export interface ProviderCredentialOverrides {
   model?: string;
@@ -97,6 +105,50 @@ export function getProviderCredentials(
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
+    };
+  }
+
+  if (provider === 'openai') {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) return null;
+    const model = overrides.model || 'gpt-5.4-mini';
+    return {
+      apiUrl: 'https://api.openai.com/v1/chat/completions',
+      model,
+      maxTokensParam: 'max_completion_tokens',
+      omitTemperature: model.startsWith('gpt-5'),
+      extraBody: model.startsWith('gpt-5')
+        ? { reasoning_effort: overrides.enableReasoning ? 'medium' : 'low' }
+        : undefined,
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+    };
+  }
+
+  if (provider === 'gemini') {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return null;
+    const model = overrides.model || 'gemini-3.6-flash';
+    return {
+      // Gemini's official OpenAI-compatible endpoint lets the shared LLM
+      // client retain one audited request/streaming implementation.
+      apiUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+      model,
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      // Gemini thinking tokens count against the completion cap. This route
+      // performs schema-constrained evidence synthesis, so low effort leaves
+      // room for the cited answer even when the UI's "deep" mode requests a
+      // broader evidence set. OpenAI still receives medium effort in deep mode.
+      extraBody: {
+        reasoning_effort: 'low',
+      },
+      // Gemini 3.6 deprecates sampling parameters.
+      omitTemperature: model.startsWith('gemini-3'),
     };
   }
 
@@ -193,7 +245,14 @@ export function stripThinkingTags(text: string): string {
 // fallback. Ollama stays first so self-hosted deployments are untouched —
 // it is skipped in cloud where OLLAMA_API_URL is unset.
 const PROVIDER_CHAIN = ['ollama', 'openrouter', 'groq', 'generic'] as const;
-const PROVIDER_SET = new Set<string>(PROVIDER_CHAIN);
+const PROVIDER_SET = new Set<string>([
+  ...PROVIDER_CHAIN,
+  // Gold Analyst exposes these providers explicitly. They are intentionally
+  // not added to the historic global fallback chain, so existing LLM
+  // surfaces keep their cost and routing behaviour unchanged.
+  'openai',
+  'gemini',
+]);
 
 export interface LlmCallOptions {
   messages: Array<{ role: string; content: string }>;
@@ -219,6 +278,8 @@ export interface LlmCallOptions {
    * retain the historic first-non-empty-completion behavior.
    */
   retryOnLengthLimit?: boolean;
+  /** Ask OpenAI-compatible providers to enforce a JSON object response. */
+  responseFormat?: 'json_object';
 }
 
 export interface LlmCallResult {
@@ -324,11 +385,15 @@ export const callLlmTool = (opts: Omit<LlmCallOptions, 'providerOrder' | 'modelO
 export const callLlmReasoning = (opts: Omit<LlmCallOptions, 'providerOrder' | 'modelOverrides'>) =>
   callLlmProfile({ enableReasoning: true, ...opts }, 'LLM_REASONING_PROVIDER', 'LLM_REASONING_MODEL', 'openrouter');
 
-// enableReasoning is omitted too: the reasoning stream hardcodes it on —
-// exposing the knob on the stream type would be a silent no-op for callers.
 export type LlmStreamOptions = Omit<LlmCallOptions, 'stripThinkingTags' | 'validate' | 'providerOrder' | 'modelOverrides' | 'provider' | 'enableReasoning' | 'retryOnLengthLimit'> & {
   /** When fired, aborts the active provider fetch and stops the stream. */
   signal?: AbortSignal;
+  /** Force a single provider instead of using the reasoning fallback chain. */
+  provider?: LlmProviderName;
+  /** Model override for the forced provider. */
+  model?: string;
+  /** Enable provider reasoning tokens. Defaults to true for backward compatibility. */
+  enableReasoning?: boolean;
 };
 
 /**
@@ -340,9 +405,10 @@ export type LlmStreamOptions = Omit<LlmCallOptions, 'stripThinkingTags' | 'valid
  */
 export function callLlmReasoningStream(opts: LlmStreamOptions): ReadableStream<Uint8Array> {
   const envProvider = process.env.LLM_REASONING_PROVIDER;
-  const provider = (envProvider && PROVIDER_SET.has(envProvider) ? envProvider : 'openrouter') as LlmProviderName;
-  const model = process.env.LLM_REASONING_MODEL;
-  const remaining = PROVIDER_CHAIN.filter((p) => p !== provider);
+  const provider = opts.provider
+    ?? (envProvider && PROVIDER_SET.has(envProvider) ? envProvider : 'openrouter') as LlmProviderName;
+  const model = opts.model ?? process.env.LLM_REASONING_MODEL;
+  const remaining = opts.provider ? [] : PROVIDER_CHAIN.filter((p) => p !== provider);
   const providerOrder = [provider, ...remaining];
   const modelOverrides = model ? { [provider]: model } as Partial<Record<LlmProviderName, string>> : undefined;
 
@@ -353,6 +419,7 @@ export function callLlmReasoningStream(opts: LlmStreamOptions): ReadableStream<U
     timeoutMs = 90_000,
     systemAppend,
     signal: clientSignal,
+    enableReasoning = true,
   } = opts;
 
   let messages = rawMessages;
@@ -399,8 +466,7 @@ export function callLlmReasoningStream(opts: LlmStreamOptions): ReadableStream<U
 
         const creds = getProviderCredentials(providerName, {
           model: modelOverrides?.[providerName as LlmProviderName],
-          // Streaming variant of callLlmReasoning — the reasoning profile opts in.
-          enableReasoning: true,
+          enableReasoning,
         });
         if (!creds) continue;
 
@@ -441,8 +507,10 @@ export function callLlmReasoningStream(opts: LlmStreamOptions): ReadableStream<U
               ...creds.extraBody,
               model: creds.model,
               messages,
-              temperature,
-              max_tokens: maxTokens,
+              ...(creds.omitTemperature ? {} : { temperature }),
+              ...(creds.maxTokensParam === 'max_completion_tokens'
+                ? { max_completion_tokens: maxTokens }
+                : { max_tokens: maxTokens }),
               stream: true,
             }),
             signal: activeController.signal,
@@ -535,6 +603,7 @@ export async function callLlm(opts: LlmCallOptions): Promise<LlmCallResult | nul
     systemAppend,
     enableReasoning = false,
     retryOnLengthLimit = false,
+    responseFormat,
   } = opts;
 
   let messages = rawMessages;
@@ -600,8 +669,11 @@ export async function callLlm(opts: LlmCallOptions): Promise<LlmCallResult | nul
             ...creds.extraBody,
             model: creds.model,
             messages,
-            temperature,
-            max_tokens: maxTokens,
+            ...(creds.omitTemperature ? {} : { temperature }),
+            ...(creds.maxTokensParam === 'max_completion_tokens'
+              ? { max_completion_tokens: maxTokens }
+              : { max_tokens: maxTokens }),
+            ...(responseFormat ? { response_format: { type: responseFormat } } : {}),
           }),
           // #5246: DeepSeek V4 Flash is bimodal — healthy calls finish near 2s,
           // while stalled calls hang to the old 25s clamp. Cut only this model's

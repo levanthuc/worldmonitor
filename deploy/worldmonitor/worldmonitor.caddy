@@ -1,0 +1,6 @@
+# Copy to /opt/gateway/sites/worldmonitor.caddy after worldmonitor-app is
+# healthy on the external Docker `gateway` network.
+thitruong.tongluc.com {
+  encode gzip
+  reverse_proxy worldmonitor-app:8080
+}

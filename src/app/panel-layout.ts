@@ -164,6 +164,7 @@ const DASHBOARD_REFERENCE_LINKS = [
 export const DEFERRED_PANEL_NATURAL_FOOTPRINTS: Readonly<Record<string, DeferredPanelShellFootprint>> = {
   cii: { rowSpan: 2 },
   'chat-analyst': { rowSpan: 2 },
+  'gold-analyst': { rowSpan: 2 },
   'china-corridors': { rowSpan: 2, className: 'panel-wide' },
   'china-activity-nowcast': { rowSpan: 2, className: 'panel-wide' },
   'consumer-prices': { rowSpan: 2 },
@@ -2276,6 +2277,7 @@ export class PanelLayoutManager implements AppModule {
     this.lazyDefaultPanel('liquidity-shifts', () => import('@/components/LiquidityShiftsPanel'), 'LiquidityShiftsPanel');
     this.lazyDefaultPanel('positioning-247', () => import('@/components/PositioningPanel'), 'PositioningPanel');
     this.lazyDefaultPanel('gold-intelligence', () => import('@/components/GoldIntelligencePanel'), 'GoldIntelligencePanel');
+    this.lazyDefaultPanel('gold-analyst', () => import('@/components/GoldAnalystPanel'), 'GoldAnalystPanel');
     this.lazyDefaultPanel('hormuz-tracker', () => import('@/components/HormuzPanel'), 'HormuzPanel');
     this.lazyDefaultPanel('etf-flows', () => import('@/components/ETFFlowsPanel'), 'ETFFlowsPanel');
     this.lazyDefaultPanel('stablecoins', () => import('@/components/StablecoinPanel'), 'StablecoinPanel');

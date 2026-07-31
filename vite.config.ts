@@ -2,6 +2,7 @@ import { defineConfig, loadEnv, type Plugin } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 import type { OutputBundle } from 'rollup';
 import { resolve, dirname, extname } from 'path';
+import { execFile } from 'child_process';
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import { brotliCompress } from 'zlib';
 import { promisify } from 'util';
@@ -22,6 +23,7 @@ import { isAllowedDomain } from './api/_rss-allowed-domain-match.js';
 
 
 const brotliCompressAsync = promisify(brotliCompress);
+const execFileAsync = promisify(execFile);
 const BROTLI_EXTENSIONS = new Set(['.js', '.mjs', '.css', '.html', '.svg', '.json', '.txt', '.xml', '.wasm']);
 const STATIC_SCRIPT_NONCE = 'wm-static-bootstrap';
 
@@ -98,7 +100,8 @@ const PANEL_CLUSTER: Record<string, PanelChunkName> = {
   AAIISentiment: 'panels-markets', CotPositioning: 'panels-markets',
   ETFFlows: 'panels-markets', EarningsCalendar: 'panels-markets',
   EconomicCalendar: 'panels-markets', FearGreed: 'panels-markets',
-  GoldIntelligence: 'panels-markets', LiquidityShifts: 'panels-markets',
+  GoldAnalyst: 'panels-markets', GoldIntelligence: 'panels-markets',
+  LiquidityShifts: 'panels-markets',
   MacroSignals: 'panels-markets', Market: 'panels-markets',
   MarketBreadth: 'panels-markets', MarketImplications: 'panels-markets',
   Positioning: 'panels-markets', Stablecoin: 'panels-markets',
@@ -419,6 +422,129 @@ function polymarketPlugin(): Plugin {
           // Expected: Cloudflare JA3 blocks server-side TLS — return empty array
           res.setHeader('Cache-Control', 'public, max-age=300');
           res.end('[]');
+        }
+      });
+    },
+  };
+}
+
+/**
+ * Vite has no file-based routing for top-level Vercel Edge Functions.
+ * Bridge the self-hosted Gold Analyst SSE route during local development so
+ * the same edge handler runs at /api/gold-analyst without exposing any
+ * provider API key to browser code.
+ */
+function goldAnalystDevPlugin(): Plugin {
+  return {
+    name: 'gold-analyst-dev',
+    configureServer(server) {
+      const port = server.config.server.port || 3000;
+      process.env.WM_GOLD_ANALYST_DEV_SOURCE_ORIGIN = `http://127.0.0.1:${port}`;
+
+      server.middlewares.use(async (req, res, next) => {
+        const path = req.url?.split('?', 1)[0];
+        if (path === '/api/gold-analyst-source/cftc') {
+          try {
+            const { stdout } = await execFileAsync('curl', [
+              '-sS',
+              '-L',
+              '--max-time', '20',
+              '-A', 'WorldMonitor/1.0 market-research',
+              'https://www.cftc.gov/dea/newcot/f_disagg.txt',
+            ], { maxBuffer: 4 * 1024 * 1024 });
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+            res.setHeader('Cache-Control', 'private, max-age=600');
+            res.end(stdout);
+          } catch {
+            res.statusCode = 502;
+            res.end('CFTC source unavailable');
+          }
+          return;
+        }
+
+        if (path === '/api/gold-analyst-source/gld-flows') {
+          try {
+            const response = await fetch(
+              'https://api.spdrgoldshares.com/api/v1/historical-archive?product=gld&exchange=NYSE&lang=en',
+              {
+                headers: {
+                  Accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream,*/*',
+                  Origin: 'https://www.spdrgoldshares.com',
+                  Referer: 'https://www.spdrgoldshares.com/usa/historical-data/',
+                  'User-Agent': 'Mozilla/5.0 WorldMonitor/1.0',
+                },
+                signal: AbortSignal.timeout(30_000),
+              },
+            );
+            if (!response.ok) throw new Error(`SPDR HTTP ${response.status}`);
+            // Keep this local-only JavaScript helper out of Vite's config bundle;
+            // importing its executable shebang through esbuild would corrupt it.
+            const seedModuleUrl = new URL('./scripts/seed-gold-etf-flows.mjs', import.meta.url).href;
+            const { parseGldArchiveXlsx, computeFlows } = await import(/* @vite-ignore */ seedModuleUrl);
+            const history = await parseGldArchiveXlsx(Buffer.from(await response.arrayBuffer()));
+            const flows = computeFlows(history);
+            if (!flows) throw new Error('SPDR history was empty');
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Cache-Control', 'private, max-age=600');
+            res.end(JSON.stringify(flows));
+          } catch {
+            res.statusCode = 502;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ error: 'SPDR history unavailable' }));
+          }
+          return;
+        }
+
+        if (path !== '/api/gold-analyst') return next();
+
+        const abortController = new AbortController();
+        req.once('aborted', () => abortController.abort());
+
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) {
+            chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+          }
+          const body = chunks.length > 0 ? Buffer.concat(chunks).toString() : undefined;
+          const headers = new Headers();
+          for (const [key, value] of Object.entries(req.headers)) {
+            if (typeof value === 'string') headers.set(key, value);
+            else if (Array.isArray(value)) headers.set(key, value.join(', '));
+          }
+
+          const webRequest = new Request(`http://127.0.0.1:${port}${req.url ?? path}`, {
+            method: req.method,
+            headers,
+            body,
+            signal: abortController.signal,
+          });
+          const { default: handler } = await import('./api/gold-analyst');
+          const response = await handler(webRequest);
+
+          res.statusCode = response.status;
+          response.headers.forEach((value, key) => res.setHeader(key, value));
+          if (!response.body) {
+            res.end();
+            return;
+          }
+
+          const reader = response.body.getReader();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (!res.destroyed) res.write(Buffer.from(value));
+          }
+          if (!res.destroyed) res.end();
+        } catch (error) {
+          if (abortController.signal.aborted) return;
+          console.error('[gold-analyst-dev]', error);
+          if (!res.headersSent) {
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/json');
+          }
+          if (!res.destroyed) res.end(JSON.stringify({ error: 'Gold Analyst dev bridge failed' }));
         }
       });
     },
@@ -908,6 +1034,7 @@ export default defineConfig(({ mode }) => {
       // hostname). Desktop and dedicated VITE_VARIANT builds skip it.
       !isDesktopBuild && activeVariant === 'full' && variantDashboardHtmlPlugin(),
       polymarketPlugin(),
+      goldAnalystDevPlugin(),
       rssProxyPlugin(),
       youtubeLivePlugin(),
       gpsjamDevPlugin(),

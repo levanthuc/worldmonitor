@@ -1,0 +1,82 @@
+# Commodity-focused WorldMonitor deployment behind the shared /opt/gateway
+# Caddy instance. Run with:
+# docker compose --env-file .env -f deploy/worldmonitor/compose.gateway.yaml up -d
+#
+# Only the `worldmonitor` container joins the external `gateway` network.
+# Redis and the Redis REST adapter stay private; the adapter is bound to
+# localhost solely for the host-side scheduled seed scripts.
+services:
+  worldmonitor:
+    image: ${WM_IMAGE:?Set WM_IMAGE to an immutable image tag before deploy}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ../../.env
+    environment:
+      UPSTASH_REDIS_REST_URL: http://redis-rest:80
+      UPSTASH_REDIS_REST_TOKEN: ${REDIS_TOKEN:?Set REDIS_TOKEN in .env}
+      LOCAL_API_PORT: "46123"
+      LOCAL_API_MODE: docker
+      LOCAL_API_CLOUD_FALLBACK: "false"
+      TZ: Asia/Ho_Chi_Minh
+    depends_on:
+      redis-rest:
+        condition: service_started
+    expose:
+      - "8080"
+    networks:
+      default:
+      gateway:
+        aliases:
+          - worldmonitor-app
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lru
+    volumes:
+      - worldmonitor_redis_data:/data
+
+  redis-rest:
+    image: ${WM_REDIS_REST_IMAGE:-worldmonitor-redis-rest:local}
+    restart: unless-stopped
+    environment:
+      SRH_TOKEN: ${REDIS_TOKEN:?Set REDIS_TOKEN in .env}
+      SRH_CONNECTION_STRING: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379
+    depends_on:
+      - redis
+    ports:
+      - 127.0.0.1:${WM_REDIS_REST_PORT:-8079}:80
+
+  # Run on demand or from systemd timers, for example:
+  # docker compose --env-file .env -f deploy/worldmonitor/compose.gateway.yaml \
+  #   run --rm worldmonitor-seeder scripts/seed-market-quotes.mjs
+  worldmonitor-seeder:
+    profiles: [seed]
+    image: ${WM_SEED_IMAGE:?Set WM_SEED_IMAGE to the matching seeder image tag}
+    init: true
+    env_file:
+      - ../../.env
+    environment:
+      UPSTASH_REDIS_REST_URL: http://redis-rest:80
+      UPSTASH_REDIS_REST_TOKEN: ${REDIS_TOKEN:?Set REDIS_TOKEN in .env}
+      UPSTASH_ALLOW_INSECURE_HTTP: "true"
+      TZ: Asia/Ho_Chi_Minh
+    depends_on:
+      redis-rest:
+        condition: service_started
+    entrypoint: [node]
+
+networks:
+  gateway:
+    external: true
+
+volumes:
+  worldmonitor_redis_data:

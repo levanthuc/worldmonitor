@@ -801,6 +801,7 @@ const COMMODITY_PANELS: Record<string, PanelConfig> = {
   'pipeline-status': { name: 'Oil & Gas Pipeline Status', enabled: false, priority: 2 },
   'oil-inventories': { name: 'Oil Inventories', enabled: true, priority: 60 },
   'gold-intelligence': { name: 'Gold Intelligence', enabled: true, priority: 60 },
+  'gold-analyst': { name: 'Gold Analyst', enabled: true, priority: 1 },
   heatmap: { name: 'Sector Heatmap', enabled: true, priority: 1 },
   'macro-signals': { name: 'Market Regime', enabled: true, priority: 1 },
   'trade-policy': { name: 'Trade Policy', enabled: true, priority: 1, premium: 'locked' as const },
@@ -1448,7 +1449,7 @@ export const PANEL_CATEGORY_MAP: Record<string, { labelKey: string; panelKeys: s
   // Commodity variant
   commodityPrices: {
     labelKey: 'header.panelCatCommodityPrices',
-    panelKeys: ['commodities', 'energy-complex', 'gold-silver', 'energy', 'base-metals', 'critical-minerals', 'markets', 'heatmap', 'macro-signals'],
+    panelKeys: ['commodities', 'energy-complex', 'gold-silver', 'gold-intelligence', 'gold-analyst', 'energy', 'base-metals', 'critical-minerals', 'markets', 'heatmap', 'macro-signals'],
     variants: ['commodity'],
   },
   miningIndustry: {
