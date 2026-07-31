@@ -341,6 +341,10 @@ export class GoldAnalystPanel extends Panel {
     try {
       const response = await fetch(`${API_URL}?mode=export`, {
         headers: { Accept: 'application/json' },
+        // Data Export is explicitly public and has no user/provider state.
+        // It stays available even if an unrelated anonymous-session refresh
+        // is temporarily in its cooldown state.
+        credentials: 'omit',
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const payload = await response.json() as GoldAnalystDataExportResponse;

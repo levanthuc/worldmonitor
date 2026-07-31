@@ -35,7 +35,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-import { isApiCallTarget } from '../src/services/wm-session.ts';
+import { isApiCallTarget, isCredentiallessPublicDataRequest } from '../src/services/wm-session.ts';
 
 const CANONICAL_ORIGIN = 'https://api.worldmonitor.app';
 
@@ -161,6 +161,24 @@ describe('wm-session interceptor URL matcher (PR #3574 regression)', () => {
   it('returns false on garbage input rather than throwing', () => {
     assert.equal(isApiCallTarget('', CANONICAL_ORIGIN), false);
     assert.equal(isApiCallTarget('not-a-url', CANONICAL_ORIGIN), false);
+  });
+});
+
+describe('Gold Analyst public data export', () => {
+  const canBypassSession = (url: string, init: RequestInit = { credentials: 'omit' }): boolean =>
+    isCredentiallessPublicDataRequest(url, init, url);
+
+  it('allows exactly the credentialless GET export mode during a session outage', () => {
+    assert.equal(canBypassSession('/api/gold-analyst?mode=export'), true);
+    assert.equal(canBypassSession('https://api.worldmonitor.app/api/gold-analyst?mode=export'), true);
+  });
+
+  it('does not let analysis, credentials, or arbitrary query data bypass the session guard', () => {
+    assert.equal(canBypassSession('/api/gold-analyst'), false);
+    assert.equal(canBypassSession('/api/gold-analyst?mode=config'), false);
+    assert.equal(canBypassSession('/api/gold-analyst?mode=export&anything=1'), false);
+    assert.equal(canBypassSession('/api/gold-analyst?mode=export', { credentials: 'include' }), false);
+    assert.equal(canBypassSession('/api/gold-analyst?mode=export', { method: 'POST', credentials: 'omit' }), false);
   });
 });
 

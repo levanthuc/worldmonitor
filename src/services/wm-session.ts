@@ -617,7 +617,7 @@ export function isApiCallTarget(url: string, apiOrigin: string): boolean {
   return parsed.origin === apiOrigin && parsed.pathname.startsWith('/api/');
 }
 
-function isCredentiallessPublicDataRequest(
+export function isCredentiallessPublicDataRequest(
   input: RequestInfo | URL,
   init: RequestInit | undefined,
   url: string,
@@ -635,6 +635,27 @@ function isCredentiallessPublicDataRequest(
   const pathname = parsed.pathname.length > 1 ? parsed.pathname.replace(/\/+$/, '') : parsed.pathname;
   const method = init?.method ?? (input instanceof Request ? input.method : 'GET');
   if (isPublicSharedRpcRequest(parsed, method)) return true;
+
+  // The Gold/Silver Data Export is a deliberately public, read-only copy
+  // bundle: it contains only the WorldMonitor snapshot, citations and the
+  // client-facing safety instructions, never an AI key, user history or a
+  // provider call.  It must remain usable when a browser's anonymous-session
+  // cookie is unavailable; otherwise its independent "copy for ChatGPT"
+  // purpose is defeated by an unrelated session outage.
+  //
+  // Keep the bypass as narrow as the bootstrap exceptions below.  The caller
+  // must explicitly omit credentials, use GET, and request exactly the one
+  // public mode (no arbitrary query extensions can opt another operation out
+  // of the session guard).
+  if (
+    pathname === '/api/gold-analyst'
+    && method.toUpperCase() === 'GET'
+    && parsed.searchParams.getAll('mode').length === 1
+    && parsed.searchParams.get('mode') === 'export'
+    && [...parsed.searchParams.keys()].every((key) => key === 'mode')
+  ) {
+    return true;
+  }
   if (pathname !== '/api/bootstrap' || method.toUpperCase() !== 'GET') return false;
 
   const params = Array.from(parsed.searchParams.keys());
